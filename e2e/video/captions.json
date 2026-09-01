@@ -1,0 +1,104 @@
+{
+  "_comment": "On-Premise 시연 영상 자막 소스. 시간은 해당 clip 시작 기준(초). 문구 수정 후 `npm run build:captions` 재실행. clip 은 segments.json 의 id 와 1:1.",
+  "_note2": "title/ending 은 segments.json 의 카드 drawtext 로 문구가 들어가므로 여기서 자막을 넣지 않는다 (중복 방지).",
+  "clips": [
+    "title",
+    "install",
+    "ch04-login",
+    "ch04-users",
+    "ch09-audit",
+    "ch08-monitoring",
+    "ch07-nas",
+    "ch06-ai",
+    "ch10-branding",
+    "ending"
+  ],
+  "minDurationSec": 2.5,
+  "maxLines": 2,
+  "captions": [
+    {
+      "id": "install-1",
+      "clip": "install",
+      "startSec": 1.0,
+      "endSec": 12.0,
+      "text": "외부 SaaS 가입 없이\n기업 서버에 직접 설치"
+    },
+    {
+      "id": "install-2",
+      "clip": "install",
+      "startSec": 14.0,
+      "endSec": 26.0,
+      "text": "DB와 백엔드는 내부 네트워크에 격리하고\n웹 서비스만 공개"
+    },
+    {
+      "id": "admin-login-1",
+      "clip": "ch04-login",
+      "startSec": 1.5,
+      "endSec": 12.0,
+      "text": "관리자 MFA로 운영 권한 보호"
+    },
+    {
+      "id": "users-1",
+      "clip": "ch04-users",
+      "startSec": 1.0,
+      "endSec": 9.0,
+      "text": "회사 관리자가 사용자 계정을 직접 발급"
+    },
+    {
+      "id": "users-2",
+      "clip": "ch04-users",
+      "startSec": 10.0,
+      "endSec": 18.0,
+      "text": "활성·정지 등 접근 상태를 중앙에서 통제"
+    },
+    {
+      "id": "audit-1",
+      "clip": "ch09-audit",
+      "startSec": 1.0,
+      "endSec": 10.0,
+      "text": "예약 리포트 발송 현황을 관리자가 추적"
+    },
+    {
+      "id": "audit-2",
+      "clip": "ch09-audit",
+      "startSec": 11.0,
+      "endSec": 21.0,
+      "text": "누가 언제 접근하고 무엇을 바꿨는지\n로그인 이력과 감사 로그로 추적"
+    },
+    {
+      "id": "monitoring-1",
+      "clip": "ch08-monitoring",
+      "startSec": 1.0,
+      "endSec": 13.0,
+      "text": "CPU·메모리·저장소 상태를\n관리자 화면에서 직접 확인"
+    },
+    {
+      "id": "nas-1",
+      "clip": "ch07-nas",
+      "startSec": 1.0,
+      "endSec": 10.0,
+      "text": "파일을 로컬 디스크 또는 사내 NAS에 저장"
+    },
+    {
+      "id": "nas-2",
+      "clip": "ch07-nas",
+      "startSec": 12.0,
+      "endSec": 23.0,
+      "text": "서비스 재시작 없이 저장소를\n사내 NAS로 전환"
+    },
+    {
+      "id": "ai-1",
+      "clip": "ch06-ai",
+      "startSec": 1.0,
+      "endSec": 13.0,
+      "text": "AI 사용 여부와 사용량도\n조직 정책으로 통제"
+    },
+    {
+      "id": "branding-1",
+      "clip": "ch10-branding",
+      "startSec": 1.0,
+      "endSec": 7.5,
+      "text": "조직명과 로고를 바꿔\n자체 서비스로 구성"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "b2bgearvia-e2e-demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:full": "playwright test tests/full-demo.spec.ts",
+    "test:chapters": "playwright test tests/chapters",
+    "record:full": "playwright test tests/full-demo.spec.ts && node scripts/promote-video.mjs",
+    "record:chapter": "playwright test",
+    "install:browsers": "playwright install chromium",
+    "build:captions": "node video/build-captions.mjs",
+    "assemble": "node video/assemble.mjs",
+    "vm:record": "node video/vm-record.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.3"
+  }
+}

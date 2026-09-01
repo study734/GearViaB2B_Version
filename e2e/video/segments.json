@@ -1,0 +1,54 @@
+{
+  "_comment": "영상 조립 매니페스트. assemble.mjs 가 이 순서대로 ffmpeg 로 정규화·배속·concat 하고, 각 세그먼트 길이에서 자막 타임라인을 자동 계산한다. id 는 captions.json 의 clips 와 1:1.",
+  "_note_login": "관리자 chapter webm 은 모두 앞부분에 loginAsAdmin(MFA 포함, 약 8~13초)이 들어 있다. ch04-login 만 inSec=0 으로 그 장면을 쓰고, 나머지는 inSec 을 로그인 이후로 잡아 중복을 자른다. 실제 값은 첫 녹화 후 조정.",
+  "_tier": "core(설치·MFA·사용자·감사)는 넉넉히, monitoring/AI 는 축소, branding·부차 테이블은 3~8초로 스치듯.",
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "file": "output/assemble/onprem-final.mp4"
+  },
+  "card": {
+    "bg": "0x0B0B0B",
+    "fontFile": "C:/Windows/Fonts/malgun.ttf",
+    "fontColor": "white",
+    "fontSize": 60,
+    "lineSpacing": 18
+  },
+  "subtitle": {
+    "srt": "output/captions/final.srt",
+    "forceStyle": "Fontname=Malgun Gothic,FontSize=26,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=64"
+  },
+  "segments": [
+    {
+      "id": "title",
+      "type": "card",
+      "durationSec": 8,
+      "text": "On-Premise GearVia\n기업 내부에서 직접 운영하는 협업 플랫폼"
+    },
+    {
+      "id": "install",
+      "type": "clip-ramped",
+      "source": "video/input/install-raw.webm",
+      "_note": "raw 길이 확인 후 parts 의 inSec/outSec 를 실제 값으로. speed=1 은 정상 속도, 나머지는 대기 구간 배속.",
+      "parts": [
+        { "inSec": 0, "outSec": 5, "speed": 1 },
+        { "inSec": 5, "outSec": 365, "speed": 30 },
+        { "inSec": 365, "outSec": 379, "speed": 1 }
+      ]
+    },
+    { "id": "ch04-login",     "type": "clip", "source": "video/input/onprem-04-users.webm",      "inSec": 0,  "outSec": 13, "_beat": "관리자 로그인 + MFA (core)" },
+    { "id": "ch04-users",     "type": "clip", "source": "video/input/onprem-04-users.webm",      "inSec": 13, "outSec": 33, "_beat": "사용자 계정 중앙 통제 (core)" },
+    { "id": "ch09-audit",     "type": "clip", "source": "video/input/onprem-09-audit.webm",      "inSec": 9,  "outSec": 31, "_beat": "로그인 이력 + 감사 로그 (core)" },
+    { "id": "ch08-monitoring","type": "clip", "source": "video/input/onprem-08-monitoring.webm", "inSec": 9,  "outSec": 23, "_beat": "자원 모니터링 (축소)" },
+    { "id": "ch07-nas",       "type": "clip", "source": "video/input/onprem-07-nas.webm",        "inSec": 9,  "outSec": 33, "_beat": "NAS 연결·전환 (차별화, 유지)" },
+    { "id": "ch06-ai",        "type": "clip", "source": "video/input/onprem-06-ai.webm",         "inSec": 9,  "outSec": 23, "_beat": "AI 정책·사용량 (축소)" },
+    { "id": "ch10-branding",  "type": "clip", "source": "video/input/onprem-10-branding.webm",   "inSec": 9,  "outSec": 17, "_beat": "조직 브랜딩 (부차, 스치듯 — 오버플로 시 1순위 컷)" },
+    {
+      "id": "ending",
+      "type": "card",
+      "durationSec": 10,
+      "text": "기업이 직접 구축·관리·통제하는\nOn-Premise GearVia"
+    }
+  ]
+}

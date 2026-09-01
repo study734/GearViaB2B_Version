@@ -1,0 +1,13 @@
+{
+  "_comment": "최종 편집본에서 각 clip 이 시작하는 지점(초). 편집기에서 클립을 배치한 뒤 실제 값으로 채운다. `cp timeline.example.json timeline.json` 후 수정. 아래 값은 ONPREM_VIDEO_PLAN.md 6장 계획 기준 예시.",
+  "title": 0,
+  "install": 8,
+  "ch01-admin-login": 36,
+  "ch04-users": 48,
+  "ch09-audit": 66,
+  "ch08-monitoring": 82,
+  "ch07-nas": 104,
+  "ch06-ai": 130,
+  "ch10-branding": 152,
+  "ending": 170
+}

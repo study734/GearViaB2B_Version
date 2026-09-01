@@ -21,6 +21,10 @@ infra/*
 !installer/
 !installer/**
 
+# Playwright demo automation is intentionally isolated from application code.
+!e2e/
+!e2e/**
+
 # Build outputs and local runtime data
 backend/target/
 backend/logs/

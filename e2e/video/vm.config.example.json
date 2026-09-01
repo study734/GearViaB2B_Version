@@ -1,0 +1,26 @@
+{
+  "_comment": "video/vm.config.json 으로 복사해서 작성. gitignore 대상 (호스트 경로·게스트 비밀번호 포함).",
+
+  "vboxManage": "C:/Program Files/Oracle/VirtualBox/VBoxManage.exe",
+
+  "vmName": "GearVia-rec",
+  "baseSnapshot": "os-ready",
+  "postSnapshot": "post-install-clean",
+
+  "guestUser": "gearvia",
+  "guestPassword": "changeme",
+  "guestSudoNeedsPassword": true,
+
+  "repoUrl": "https://github.com/HO-0219/GearViaB2B_Version.git",
+  "repoDir": "/home/gearvia/GearViaB2B_Version",
+
+  "recording": { "videores": "1920x1080", "videofps": 30, "videorate": 3072 },
+  "readyTimeoutSec": 2400,
+
+  "_provision_only": "아래는 --provision (베이스 VM 무인 설치) 에만 사용",
+  "iso": "C:/isos/ubuntu-24.04.2-live-server-amd64.iso",
+  "memoryMB": 4096,
+  "cpus": 2,
+  "diskMB": 30000,
+  "vmDiskDir": "C:/VMs/GearVia-rec"
+}
