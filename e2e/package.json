@@ -12,7 +12,8 @@
     "install:browsers": "playwright install chromium",
     "build:captions": "node video/build-captions.mjs",
     "assemble": "node video/assemble.mjs",
-    "vm:record": "node video/vm-record.mjs"
+    "vm:record": "node video/vm-record.mjs",
+    "render:termlog": "node video/render-termlog.mjs"
   },
   "devDependencies": {
     "@playwright/test": "latest",

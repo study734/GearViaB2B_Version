@@ -14,7 +14,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
-  timeout: 120_000,
+  timeout: 300_000,
   expect: { timeout: 15_000 },
   reporter: [
     ['list'],
@@ -22,12 +22,15 @@ export default defineConfig({
   ],
   use: {
     baseURL,
-    video: 'on',
+    // 'on' 만 쓰면 Playwright 가 영상을 800px 안으로 축소해 저장한다(≈480p 느낌).
+    // size 를 명시해 뷰포트와 동일한 1080p 로 녹화한다.
+    video: { mode: 'on', size: { width: 1920, height: 1080 } },
     ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === 'true',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     ...devices['Desktop Chrome'],
     viewport: { width: 1920, height: 1080 },
+    deviceScaleFactor: 1,
     ...(browserChannel ? { channel: browserChannel } : {}),
   },
   metadata: {
@@ -39,7 +42,7 @@ export default defineConfig({
     cwd: repoDir,
     url: baseURL,
     reuseExistingServer: true,
-    timeout: 120_000,
+    timeout: 300_000,
     stdout: 'pipe',
     stderr: 'pipe',
   },

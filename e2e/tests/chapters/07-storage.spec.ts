@@ -6,15 +6,17 @@ test('07 · 파일 스토리지 로컬·NAS 연동 제어 화면', async ({ page
   await expect(page.getByRole('heading', { name: '스토리지 연동 설정', level: 2 })).toBeVisible();
   await expect(page.getByRole('button', { name: 'NAS 연결 테스트 및 전환', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '로컬로 되돌리기', exact: true })).toBeVisible();
-  await expect(page.getByText(/현재 방식/)).toBeVisible();
-  await expect(page.getByText(/NAS 경로/)).toBeVisible();
+  await expect(page.getByText('현재 방식', { exact: true })).toBeVisible();
+  await expect(page.getByText('NAS 경로', { exact: true })).toBeVisible();
   await pause(page, 2_500);
 
   // Opt-in only: run the real local -> nas_mount switch on a disposable
   // recording VM. Default keeps this a preview like every other admin action.
   if (allowNasSwitch()) {
+    const method = page.locator('dt', { hasText: /^현재 방식$/ }).locator('xpath=following-sibling::dd[1]');
+    await expect(method).toHaveText(/로컬|local/i);
     await page.getByRole('button', { name: 'NAS 연결 테스트 및 전환', exact: true }).click();
-    await expect(page.getByText(/현재 방식[\s\S]*NAS|NAS[\s\S]*사내 스토리지/)).toBeVisible({ timeout: 20_000 });
-    await pause(page, 3_000);
+    await expect(method).toHaveText(/NAS|사내|nas_mount/i, { timeout: 20_000 });
+    await pause(page, 3_500);
   }
 });

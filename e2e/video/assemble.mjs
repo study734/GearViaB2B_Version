@@ -37,6 +37,46 @@ const reencodeConcat = args.includes('--reencode-concat');
 const noSubs = args.includes('--no-subs');
 
 const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+const marksDir = join(e2eDir, 'output', 'marks');
+
+// output/marks/<clip>.txt ("label\tseconds" 줄) 을 읽어 { label: seconds } 반환
+function readMarks(clipId) {
+  const p = join(marksDir, `${clipId}.txt`);
+  if (!existsSync(p)) return null;
+  const m = {};
+  for (const line of readFileSync(p, 'utf8').split('\n')) {
+    const [label, sec] = line.split('\t');
+    if (label && sec) m[label.trim()] = Number(sec);
+  }
+  return m;
+}
+
+// startAtMark / endAtMark / blur.*AtMark 를 실제 시간으로 치환 (녹화 mark 기준).
+for (const s of cfg.segments ?? []) {
+  if (s.type !== 'clip') continue;
+  const m = readMarks(s.id) ?? {};
+  if (s.startAtMark || s.endAtMark) {
+    if (s.startAtMark) {
+      const base = m[s.startAtMark];
+      if (base == null) console.warn(`경고: ${s.id} mark "${s.startAtMark}" 없음 — inSec ${s.inSec ?? 0} 사용`);
+      else s.inSec = Math.max(0, Number((base + (s.startPadSec ?? -0.6)).toFixed(2)));
+    }
+    if (s.endAtMark) {
+      const end = m[s.endAtMark];
+      if (end != null) s.outSec = Number((end + (s.endPadSec ?? 1.2)).toFixed(2));
+    } else if (s.durationSec != null && s.inSec != null) {
+      s.outSec = Number((s.inSec + s.durationSec).toFixed(2));
+    }
+    if (s.inSec == null) s.inSec = 0;
+  }
+  // blur 창을 mark 로 지정 가능: blur.fromMark / blur.toMark (클립 잘라낸 뒤 기준으로 변환)
+  if (s.blur && (s.blur.fromMark || s.blur.toMark)) {
+    const inS = s.inSec ?? 0;
+    if (s.blur.fromMark && m[s.blur.fromMark] != null) s.blur.fromSec = Number((m[s.blur.fromMark] - inS + (s.blur.fromPad ?? -0.3)).toFixed(2));
+    if (s.blur.toMark && m[s.blur.toMark] != null) s.blur.toSec = Number((m[s.blur.toMark] - inS + (s.blur.toPad ?? 0.3)).toFixed(2));
+  }
+}
+
 const W = cfg.output?.width ?? 1920;
 const H = cfg.output?.height ?? 1080;
 const FPS = cfg.output?.fps ?? 30;
@@ -91,9 +131,9 @@ let t = 0;
 const timeline = {};
 const table = [];
 for (const s of cfg.segments) {
-  timeline[s.id] = Number(t.toFixed(3));
+  timeline[s.id] = { start: Number(t.toFixed(3)), inSec: Number((s.inSec ?? 0).toFixed(3)) };
   const d = segDuration(s);
-  table.push(`  ${String(timeline[s.id]).padStart(7)}s  +${d.toFixed(1).padStart(5)}s  ${s.id}  (${s.type})`);
+  table.push(`  ${String(timeline[s.id].start).padStart(7)}s  +${d.toFixed(1).padStart(5)}s  ${s.id}  (${s.type})`);
   t += d;
 }
 console.log('세그먼트 타임라인:');
@@ -140,11 +180,20 @@ cfg.segments.forEach((s, i) => {
 
   if (s.type === 'clip') {
     const dur = (Number(s.outSec) - Number(s.inSec)).toFixed(3);
+    // 선택적 블러: segments.json 의 blur = { x,y,w,h, fromSec?, toSec? }
+    // (fromSec/toSec 는 클립 자른 뒤 기준. 정규화 후 1920x1080 좌표.)
+    let blurChain = '';
+    if (s.blur) {
+      const b = s.blur;
+      const en = (b.fromSec != null || b.toSec != null)
+        ? `:enable='between(t,${b.fromSec ?? 0},${b.toSec ?? 99999})'` : '';
+      blurChain = `,split[bx0][bx1];[bx1]crop=${b.w}:${b.h}:${b.x}:${b.y},avgblur=24[bxb];[bx0][bxb]overlay=${b.x}:${b.y}${en}`;
+    }
     ff([
       '-ss', String(s.inSec), '-t', dur, '-i', s.source,
-      '-map', '0:v:0', '-vf', `setpts=PTS-STARTPTS,${norm}`,
+      '-map', '0:v:0', '-vf', `setpts=PTS-STARTPTS,${norm}${blurChain}`,
       ...ENC, outRel,
-    ], `clip ${s.id} [${s.inSec}-${s.outSec}]`);
+    ], `clip ${s.id} [${s.inSec}-${s.outSec}]${s.blur ? ' +blur' : ''}`);
     return;
   }
 

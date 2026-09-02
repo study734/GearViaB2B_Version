@@ -1,6 +1,26 @@
+import { createHmac } from 'node:crypto';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 export { expect, test };
+
+// ── 촬영 mark ────────────────────────────────────────────────────────────────
+// 화면 전환 시점을 파일에 기록해 자막(build-captions)이 실제 타임스탬프에 붙게 한다.
+// E2E_MARKS_FILE 이 지정된 녹화에서만 동작. markStart() 는 녹화 시작 직후 호출.
+let markT0 = 0;
+// 녹화 프로세스당 한 번만 T0 를 고정한다. (assertLiveRecording 이 loginAsAdmin 등에서
+// 여러 번 호출되므로 매번 재설정하면 mark 시각이 틀어진다.)
+export function markStart() { if (!markT0) markT0 = Date.now(); }
+export async function mark(page: Page, label: string) {
+  const file = process.env.E2E_MARKS_FILE?.trim();
+  if (file) {
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      appendFileSync(file, `${label}\t${((Date.now() - markT0) / 1000).toFixed(2)}\n`);
+    } catch { /* noop */ }
+  }
+}
 
 export type GroupRef = {
   id: number;
@@ -125,23 +145,34 @@ export async function loginAsAdmin(page: Page) {
   await page.getByLabel('회사 메일 또는 관리자 ID').fill(identifier);
   await page.getByLabel('비밀번호').fill(password);
   const mfa = page.getByLabel('관리자 MFA 코드');
-  const mfaWasVisible = await mfa.count() > 0 && await mfa.isVisible();
-  if (mfaWasVisible) await mfa.fill(requiredEnv('E2E_ADMIN_MFA_CODE'));
-  await page.getByRole('button', { name: '로그인', exact: true }).click();
+  const mfaConfigured = Boolean(process.env.E2E_ADMIN_MFA_CODE?.trim() || process.env.E2E_ADMIN_MFA_SECRET?.trim());
+  const loginButton = page.getByRole('button', { name: '로그인', exact: true });
+
+  const mfaVisibleNow = async () => await mfa.count() > 0 && await mfa.isVisible().catch(() => false);
+  let mfaWasVisible = await mfaVisibleNow();
+  if (mfaWasVisible) await mfa.fill(adminMfaCode());
+  await loginButton.click();
+
   if (/\/account$/.test(page.url())) {
     await completeInitialPasswordChange(page, password, requiredEnv('E2E_ADMIN_NEW_PASSWORD'));
     await page.goto('/login?next=/admin', { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: '로그인', level: 2 })).toBeVisible();
     await page.getByLabel('회사 메일 또는 관리자 ID').fill(identifier);
     await page.getByLabel('비밀번호').fill(requiredEnv('E2E_ADMIN_NEW_PASSWORD'));
-    await page.getByRole('button', { name: '로그인', exact: true }).click();
+    await loginButton.click();
   }
-  if (!mfaWasVisible && await mfa.isVisible().catch(() => false)) {
-    await mfa.fill(requiredEnv('E2E_ADMIN_MFA_CODE'));
-    await page.getByRole('button', { name: '로그인', exact: true }).click();
+
+  // MFA 는 보통 1차 로그인이 ADMIN_MFA_REQUIRED 로 거절된 뒤에야 필드가 나타난다.
+  if (!mfaWasVisible && mfaConfigured) {
+    await mfa.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {});
+  }
+  if (!mfaWasVisible && await mfaVisibleNow()) {
+    await mfa.fill(adminMfaCode());
+    await loginButton.click();
   }
   await expect(page).toHaveURL(/\/admin(?:\/|$)/);
   await expect(page.getByRole('heading', { name: /Admin$/, level: 1 })).toBeVisible();
+  await mark(page, 'admin-console');
   await pause(page, pauseMs(1_500));
 }
 
@@ -578,7 +609,11 @@ export async function previewAdminOverview(page: Page) {
     ['리포트 다운로드', '/admin/reports'], ['리포트 발송', '/admin/reports'], ['리포트 발송 실패', '/admin/reports'],
   ];
   for (const [label, destination] of statDestinations) {
-    const card = summary.getByRole('button', { name: new RegExp(escapeRegExp(label)) });
+    // 카드 이름은 "<라벨> <수치>" 형태. "리포트 발송" 이 "리포트 발송 실패" 를 함께
+    // 잡지 않도록 라벨 뒤에 공백+숫자를 요구하고, 그래도 여러 개면 첫 번째를 쓴다.
+    const card = summary
+      .getByRole('button', { name: new RegExp('^' + escapeRegExp(label) + '\\s+\\d') })
+      .first();
     await expect(card).toBeVisible();
     await card.click();
     await expect(page).toHaveURL(new RegExp(`${escapeRegExp(destination)}\\/?$`));
@@ -798,6 +833,7 @@ export async function visitAdminTab(page: Page, label: string, heading: string |
   await link.click();
   await expect(page).toHaveURL(new RegExp(`${escapeRegExp(new URL(href, page.url()).pathname)}\\/?$`));
   await expect(page.getByRole('heading', { name: heading, level: 2 })).toBeVisible();
+  await mark(page, `tab:${label}`);
   await pause(page);
 }
 
@@ -813,6 +849,7 @@ export async function ensureAdminTabs(page: Page) {
 }
 
 export function assertLiveRecording() {
+  markStart();
   const mode = (process.env.E2E_MODE ?? 'live').toLowerCase();
   if (mode !== 'live') {
     throw new Error('Only E2E_MODE=live is supported. Synthetic demo data and API fixtures are disabled.');
@@ -849,6 +886,35 @@ export function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`Missing ${name}. Live recording does not create fallback accounts or data.`);
   return value;
+}
+
+/**
+ * Returns a current admin MFA code. Prefers E2E_ADMIN_MFA_CODE (static, from an
+ * authenticator app) but, for a disposable recording VM, accepts
+ * E2E_ADMIN_MFA_SECRET (Base32) and computes a fresh TOTP so the code cannot go
+ * stale during Playwright startup.
+ */
+export function adminMfaCode(): string {
+  const secret = process.env.E2E_ADMIN_MFA_SECRET?.trim().toUpperCase().replace(/=+$/, '');
+  if (secret) {
+    const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    const bytes: number[] = [];
+    let bits = 0, val = 0;
+    for (const c of secret) {
+      const i = A.indexOf(c);
+      if (i < 0) continue;
+      val = (val << 5) | i; bits += 5;
+      if (bits >= 8) { bytes.push((val >>> (bits - 8)) & 0xff); bits -= 8; }
+    }
+    const counter = Math.floor(Date.now() / 1000 / 30);
+    const buf = Buffer.alloc(8);
+    buf.writeBigInt64BE(BigInt(counter));
+    const h = createHmac('sha1', Buffer.from(bytes)).update(buf).digest();
+    const o = h[h.length - 1] & 0x0f;
+    const bin = ((h[o] & 0x7f) << 24) | ((h[o + 1] & 0xff) << 16) | ((h[o + 2] & 0xff) << 8) | (h[o + 3] & 0xff);
+    return String(bin % 1_000_000).padStart(6, '0');
+  }
+  return adminMfaCode();
 }
 
 function escapeRegExp(value: string) {

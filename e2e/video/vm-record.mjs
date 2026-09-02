@@ -20,7 +20,7 @@
 //       데스크톱 터미널에서 수동 녹화 후 input/install-raw.webm 로 두면 된다.
 
 import { execFileSync, execFile } from 'node:child_process';
-import { existsSync, readFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -63,12 +63,11 @@ const baseSnap = cfg.baseSnapshot ?? 'os-ready';
 const postSnap = cfg.postSnapshot ?? 'post-install-clean';
 const gUser = cfg.guestUser;
 const gPass = cfg.guestPassword;
+const keyPath = resolve(e2eDir, cfg.sshKey ?? 'output/assemble/vm_key');
+let guestIp = cfg.guestIp ?? null; // 없으면 부팅 후 guestproperty 로 자동 감지
 const repoUrl = cfg.repoUrl ?? 'https://github.com/HO-0219/GearViaB2B_Version.git';
 const repoDir = cfg.repoDir ?? `/home/${gUser}/GearViaB2B_Version`;
-const rec = { videores: '1920x1080', videofps: 30, videorate: 2048, ...(cfg.recording ?? {}) };
 const readyTimeoutSec = cfg.readyTimeoutSec ?? 2400;
-const recFileAbs = join(workDir, 'install-raw.webm');
-const finalAbs = join(inputDir, 'install-raw.webm');
 
 function vbox(argv, { capture = false } = {}) {
   const printable = `VBoxManage ${argv.join(' ')}`;
@@ -82,51 +81,76 @@ function vbox(argv, { capture = false } = {}) {
   }
 }
 
-function guestRun(script, { label = '', wait = true } = {}) {
-  const sudo = cfg.guestSudoNeedsPassword
-    ? `echo ${shq(gPass)} | sudo -S -p '' `
-    : 'sudo ';
-  const full = script.replace(/\bSUDO\b/g, sudo);
-  const argv = [
-    'guestcontrol', vm,
-    `--username=${gUser}`, `--password=${gPass}`,
-    'run', '--exe=/bin/bash',
-    ...(wait ? ['--wait-stdout', '--wait-stderr'] : []),
-    '--', '/bin/bash', '-lc', full,
-  ];
-  if (label) console.log(`  · ${label}`);
-  return vbox(argv, { capture: true });
-}
-
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function waitForGuestExec() {
-  process.stdout.write('  Guest Additions 대기');
-  const deadline = Date.now() + 180_000;
+const SSH_OPTS = [
+  '-i', keyPath,
+  '-o', 'StrictHostKeyChecking=no',
+  '-o', 'UserKnownHostsFile=/dev/null',
+  '-o', 'LogLevel=ERROR',
+  '-o', 'ServerAliveInterval=15',
+  '-o', 'ConnectTimeout=10',
+];
+
+// SSH 로 게스트에서 스크립트 실행. NOPASSWD sudo 이므로 SUDO 토큰은 그냥 sudo.
+function sshRun(script, { label = '', check = false, timeoutMs = 300_000 } = {}) {
+  const full = script.replace(/\bSUDO\b/g, 'sudo ');
+  if (label) console.log(`  · ${label}`);
+  if (dryRun) { console.log(`    $ ssh ${gUser}@${guestIp} '<script>'`); return ''; }
+  try {
+    return execFileSync('ssh', [...SSH_OPTS, `${gUser}@${guestIp}`, 'bash -s'], {
+      input: full, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024,
+      timeout: timeoutMs,
+    });
+  } catch (e) {
+    const out = (e.stdout ?? '') + (e.stderr ?? '');
+    if (check) return out;
+    throw new Error(`ssh 실행 실패 (${label || 'run'}):\n${out}`);
+  }
+}
+
+function resolveGuestIp() {
+  if (guestIp) return guestIp;
+  for (let i = 1; i <= 8; i++) {
+    const out = vbox(['guestproperty', 'get', vm, `/VirtualBox/GuestInfo/Net/${i}/V4/IP`], { capture: true });
+    const m = out.match(/Value:\s*([\d.]+)/);
+    if (m && !m[1].startsWith('10.0.2.')) return m[1]; // NAT(10.0.2.x) 말고 host-only
+  }
+  return null;
+}
+
+async function waitForSsh() {
+  process.stdout.write('  SSH 대기');
+  const deadline = Date.now() + 240_000;
   while (Date.now() < deadline) {
     if (dryRun) { console.log(' (dry-run 건너뜀)'); return; }
-    const out = vbox(['guestproperty', 'get', vm, '/VirtualBox/GuestInfo/OS/Product'], { capture: true });
-    if (/Value:/.test(out)) { console.log(' ok'); return; }
+    if (!guestIp) guestIp = resolveGuestIp();
+    if (guestIp) {
+      const out = sshRun('echo __ssh_ok__', { check: true });
+      if (out.includes('__ssh_ok__')) { console.log(` ok (${guestIp})`); return; }
+    }
     process.stdout.write('.');
     await sleep(5000);
   }
-  throw new Error('Guest Additions 가 뜨지 않습니다 (guestcontrol 불가).');
+  throw new Error('SSH 로 게스트에 붙지 못했습니다.');
 }
 
 async function waitForInstallReady() {
   console.log(`  설치 완료 대기 (최대 ${readyTimeoutSec}s)`);
   const deadline = Date.now() + readyTimeoutSec * 1000;
-  const check = `cd ${shq(repoDir)} && (SUDO docker compose -f infra/b2b/docker-compose.yml ps --format '{{.State}}' 2>/dev/null || SUDO docker ps --format '{{.Status}}') | tr '\\n' ' '`;
+  const check = `SUDO docker ps --format '{{.Names}}={{.Status}}' 2>/dev/null | tr '\\n' ' '`;
   while (Date.now() < deadline) {
     if (dryRun) { console.log('  (dry-run 건너뜀)'); return; }
-    const out = guestRun(check, { wait: true });
-    const states = out.trim();
-    if (states && !/starting|unhealthy|restarting|exited|created/i.test(states) && /running|healthy|Up /i.test(states)) {
-      console.log(`  컨테이너 상태: ${states}`);
+    const states = sshRun(check, { check: true }).trim();
+    const running = (states.match(/=Up /g) || []).length;
+    const bad = /unhealthy|Restarting|Exited/i.test(states);
+    if (running >= 3 && !bad) {
+      console.log(`  컨테이너: ${states}`);
       return;
     }
-    await sleep(15_000);
+    console.log(`  대기중… (${states || '컨테이너 없음'})`);
+    await sleep(20_000);
   }
   throw new Error('설치가 시간 내에 healthy 상태가 되지 않았습니다.');
 }
@@ -147,80 +171,88 @@ console.log(`VM: ${vm}  (base=${baseSnap} → post=${postSnap})`);
 // ---- provision (optional) ----
 if (provision) {
   if (!cfg.iso || !existsSync(cfg.iso)) { console.error('--provision 에는 vm.config.json 의 iso (Ubuntu 24.04 경로) 가 필요합니다.'); process.exit(1); }
+  const vmsRoot = (cfg.vmsRoot ?? cfg.vmDiskDir ?? workDir).replace(/\\/g, '/');
+  const diskPath = `${vmsRoot}/${vm}/${vm}.vdi`;
   console.log('\n[provision] 베이스 VM 무인 설치');
-  vbox(['createvm', '--name', vm, '--ostype', 'Ubuntu_64', '--register']);
-  vbox(['modifyvm', vm, '--memory', String(cfg.memoryMB ?? 4096), '--cpus', String(cfg.cpus ?? 2), '--nic1', 'nat', '--nic2', 'hostonly', '--graphicscontroller', 'vmsvga', '--vram', '64']);
-  vbox(['createhd', '--filename', join(cfg.vmDiskDir ?? workDir, `${vm}.vdi`), '--size', String(cfg.diskMB ?? 30000)]);
-  vbox(['storagectl', vm, '--name', 'SATA', '--add', 'sata', '--controller', 'IntelAHCI']);
-  vbox(['storageattach', vm, '--storagectl', 'SATA', '--port', '0', '--device', '0', '--type', 'hdd', '--medium', join(cfg.vmDiskDir ?? workDir, `${vm}.vdi`)]);
+  vbox(['createvm', '--name', vm, '--ostype', 'Ubuntu24_LTS_64', '--basefolder', vmsRoot, '--register']);
+  vbox(['modifyvm', vm,
+    '--memory', String(cfg.memoryMB ?? 4096), '--cpus', String(cfg.cpus ?? 2),
+    '--nic1', 'nat',
+    '--nic2', 'hostonly', '--hostonlyadapter2', cfg.hostOnlyAdapter ?? 'VirtualBox Host-Only Ethernet Adapter',
+    '--graphicscontroller', 'vmsvga', '--vram', '64', '--ioapic', 'on']);
+  vbox(['createmedium', 'disk', `--filename=${diskPath}`, `--size=${cfg.diskMB ?? 40000}`, '--format=VDI']);
+  vbox(['storagectl', vm, '--name', 'SATA', '--add', 'sata', '--controller', 'IntelAHCI', '--portcount', '2']);
+  vbox(['storageattach', vm, '--storagectl', 'SATA', '--port', '0', '--device', '0', '--type', 'hdd', '--medium', diskPath]);
   vbox(['unattended', 'install', vm,
     `--iso=${cfg.iso}`,
-    `--user=${gUser}`, `--full-user-name=${gUser}`, `--password=${gPass}`,
-    '--install-additions', '--time-zone=Asia/Seoul',
-    '--post-install-command=apt-get update && apt-get install -y git ca-certificates curl',
+    `--user=${gUser}`, `--full-user-name=${gUser}`,
+    `--user-password=${gPass}`, `--admin-password=${gPass}`,
+    '--install-additions', '--locale=en_US', '--country=US', '--time-zone=Asia/Seoul',
+    `--hostname=${vm.toLowerCase()}.local`,
+    '--post-install-command=apt-get install -y git curl ca-certificates',
     '--start-vm=headless']);
-  console.log('무인 설치가 시작되었습니다. 완료까지 15~30분. 완료 후 게스트에서:');
-  console.log(`  VBoxManage snapshot ${vm} take ${baseSnap} --pause`);
-  console.log('그다음 --provision 없이 다시 실행하세요.');
+  console.log('\n무인 설치가 시작되었습니다 (headless). 완료까지 20~40분.');
+  console.log('진행 확인:  VBoxManage guestproperty get ' + vm + ' /VirtualBox/GuestInfo/OS/Product');
+  console.log('완료(값이 나오면) 후:');
+  console.log(`  VBoxManage controlvm ${vm} acpipowerbutton   # 또는 게스트에서 정상 종료`);
+  console.log(`  VBoxManage snapshot ${vm} take ${baseSnap} --description="fresh Ubuntu + git + GA"`);
+  console.log('그다음 --provision 없이 `npm run vm:record` 실행.');
   process.exit(0);
 }
 
-// ---- main: restore → boot → record → install → snapshot ----
+// ---- main: restore → boot(SSH) → install → 로그 캡처 → 오프라인 스냅샷 ----
+// 참고: headless + SSH 설치는 VM 콘솔에 아무것도 안 그려지므로 VBox 화면 녹화는 쓰지 않는다.
+// 대신 실제 install-log.txt 를 render-termlog.mjs 로 터미널 영상으로 만든다.
 (async () => {
   console.log('\n[1] 베이스 스냅샷 복원');
   vbox(['controlvm', vm, 'poweroff'], { capture: true }); // 이미 꺼져 있으면 무시
   await sleep(1500);
   vbox(['snapshot', vm, 'restore', baseSnap]);
 
-  console.log('[2] 헤드리스 부팅');
+  console.log('[2] 헤드리스 부팅 + SSH 대기');
   vbox(['startvm', vm, '--type', 'headless']);
-  await waitForGuestExec();
+  await waitForSsh();
 
   console.log('[3] 저장소 clone');
-  guestRun(`rm -rf ${shq(repoDir)} && git clone --depth 1 ${shq(repoUrl)} ${shq(repoDir)}`, { label: 'git clone' });
+  sshRun(`command -v git >/dev/null || { SUDO apt-get update -qq && SUDO apt-get install -y -qq git; }`, { label: 'ensure git' });
+  sshRun(`rm -rf ${shq(repoDir)} && git clone --depth 1 ${shq(repoUrl)} ${shq(repoDir)}`, { label: 'git clone' });
 
-  console.log('[4] 화면 녹화 시작');
-  vbox(['controlvm', vm, 'recording', 'screens', 'all']);
-  vbox(['controlvm', vm, 'recording', 'filename', recFileAbs.replace(/\\/g, '/')]);
-  vbox(['controlvm', vm, 'recording', 'videores', rec.videores]);
-  vbox(['controlvm', vm, 'recording', 'videofps', String(rec.videofps)]);
-  vbox(['controlvm', vm, 'recording', 'videorate', String(rec.videorate)]);
-  vbox(['controlvm', vm, 'recording', 'start']);
-  await sleep(2000); // 앞 여유 프레임
-
-  console.log('[5] installer 실행 (stdout → output/assemble/install-log.txt)');
-  const log = guestRun(`cd ${shq(repoDir)} && SUDO ./installer/install-virtualbox.sh 2>&1`, { label: 'install-virtualbox.sh', wait: true });
+  console.log('[4] installer 실행 (stdout -> output/assemble/install-log.txt)');
+  const log = sshRun(`export DEBIAN_FRONTEND=noninteractive; cd ${shq(repoDir)} && SUDO -E ./installer/install-virtualbox.sh 2>&1`, { label: 'install-virtualbox.sh', check: true, timeoutMs: readyTimeoutSec * 1000 });
   if (!dryRun) writeFileSync(join(workDir, 'install-log.txt'), log, 'utf8');
 
+  console.log('[5] 컨테이너 healthy 대기');
   await waitForInstallReady();
+  sshRun(`for i in 1 2 3; do curl -sk https://localhost/ -o /dev/null -w 'HTTPS %{http_code}\\n' || true; sleep 1; done`, { label: 'curl https://localhost', check: true });
 
-  console.log('[6] 로그인 페이지 확인 (콘솔에 잠깐 표시)');
-  guestRun(`for i in 1 2 3; do curl -sk https://localhost/ -o /dev/null -w 'HTTPS %{http_code}\\n' || true; sleep 1; done`, { label: 'curl https://localhost' });
-  await sleep(3000); // 뒤 여유 프레임
+  console.log('[6] VM 정상 종료 (오프라인 스냅샷용)');
+  sshRun('SUDO systemctl poweroff', { label: 'poweroff', check: true });
+  const off = Date.now() + 90_000;
+  while (Date.now() < off && !dryRun) {
+    if (/poweroff/.test(vbox(['showvminfo', vm, '--machinereadable'], { capture: true }))) break;
+    await sleep(4000);
+  }
+  vbox(['controlvm', vm, 'poweroff'], { capture: true }); // 혹시 남아있으면
 
-  console.log('[7] 녹화 종료');
-  vbox(['controlvm', vm, 'recording', 'stop']);
-  await sleep(1500);
+  console.log(`[7] 오프라인 스냅샷 ${postSnap}`);
+  vbox(['snapshot', vm, 'delete', postSnap], { capture: true }); // 이전 것 있으면 교체
+  vbox(['snapshot', vm, 'take', postSnap, '--description=On-Premise install complete, pre data prep'], { capture: true });
 
-  console.log(`[8] 스냅샷 ${postSnap}`);
-  vbox(['snapshot', vm, 'take', postSnap, '--description=On-Premise install complete, pre-recording data prep', '--live'], { capture: true });
-
-  if (!keepRunning) {
-    console.log('[9] VM 종료');
-    vbox(['controlvm', vm, 'poweroff'], { capture: true });
-  } else {
-    console.log('[9] --keep-running: VM 유지 (Playwright chapter 녹화용)');
+  console.log('[8] 터미널 로그 영상 렌더');
+  if (!dryRun) {
+    try {
+      execFileSync(process.execPath, [join(here, 'render-termlog.mjs')], { cwd: e2eDir, stdio: 'inherit' });
+    } catch (e) { console.warn('render-termlog 실패:', e.message); }
+  }
+  if (keepRunning) {
+    console.log('[9] --keep-running: post-install-clean 복원 후 재부팅 (chapter 녹화용)');
+    if (!dryRun) { vbox(['snapshot', vm, 'restore', postSnap]); vbox(['startvm', vm, '--type', 'headless']); }
   }
 
   if (!dryRun) {
-    if (existsSync(recFileAbs)) {
-      renameSync(recFileAbs, finalAbs);
-      console.log(`\n완료: ${finalAbs}`);
-      console.log('다음: chapter webm 녹화 후  npm run assemble');
-    } else {
-      console.warn(`\n녹화 파일을 못 찾음: ${recFileAbs}`);
-      console.warn('VM 폴더의 .webm 을 직접 video/input/install-raw.webm 로 옮기세요.');
-    }
+    const out = join(inputDir, 'install-raw.mp4');
+    if (existsSync(out)) console.log(`\n완료: ${out}  (터미널 로그 영상)\n다음: chapter webm 녹화 후  npm run assemble`);
+    else console.warn(`\n렌더 결과 없음. 수동: npm run render:termlog`);
   } else {
     console.log('\n(--dry-run: 실제 실행 안 함)');
   }
