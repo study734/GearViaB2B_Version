@@ -1,10 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { adminApi, DeploymentJob, DeploymentSettingsStatus } from '../../../api/adminApi';
 import { errorMessage } from '../../../api/client';
 import { useLanguage } from '../../../app/LanguageContext';
 
-export function AdminDeploymentSettingsPage() {
+// The host applier runs asynchronously (systemd path unit), so apply() first
+// returns SWITCHED; poll the job until it finalizes before trusting the result.
+const TERMINAL_STATES = new Set(['COMPLETED', 'ROLLED_BACK', 'FAILED']);
+const MAX_POLLS = 150;
+
+export function AdminDeploymentSettingsPage({ pollIntervalMs = 2000 }: { pollIntervalMs?: number } = {}) {
   const { t } = useLanguage();
+  const cancelled = useRef(false);
+  useEffect(() => () => { cancelled.current = true; }, []);
   const [status, setStatus] = useState<DeploymentSettingsStatus>();
   const [error, setError] = useState('');
   const [publicUrl, setPublicUrl] = useState('');
@@ -43,13 +50,21 @@ export function AdminDeploymentSettingsPage() {
     setBusy(true);
     setError('');
     try {
-      setJob(await adminApi.applyDeploymentJob(job.jobId));
+      let current = await adminApi.applyDeploymentJob(job.jobId);
+      setJob(current);
+      for (let i = 0; i < MAX_POLLS && !cancelled.current && !TERMINAL_STATES.has(current.status); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+        if (cancelled.current) return;
+        current = await adminApi.deploymentJob(job.jobId);
+        if (cancelled.current) return;
+        setJob(current);
+      }
       const refreshed = await adminApi.deploymentSettings();
-      setStatus(refreshed);
+      if (!cancelled.current) setStatus(refreshed);
     } catch (value) {
-      setError(errorMessage(value));
+      if (!cancelled.current) setError(errorMessage(value));
     } finally {
-      setBusy(false);
+      if (!cancelled.current) setBusy(false);
     }
   }
 

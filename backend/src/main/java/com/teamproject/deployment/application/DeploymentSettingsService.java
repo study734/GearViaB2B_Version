@@ -52,12 +52,15 @@ public class DeploymentSettingsService {
     private final PublicUrlProvider publicUrls;
     private final AdminNoticeService notices;
     private final Path controlRoot;
+    private final long resultWaitMs;
 
     public DeploymentSettingsService(DeploymentSettingsRepository settings,
             InfrastructureChangeJobRepository jobs, UserRepository users, HostApplyGateway hostApply,
             PublicUrlProvider publicUrls, AdminNoticeService notices,
             @org.springframework.beans.factory.annotation.Value(
-                    "${app.host-apply.control-root:/var/lib/gearvia/control}") String controlRoot) {
+                    "${app.host-apply.control-root:/var/lib/gearvia/control}") String controlRoot,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${app.host-apply.result-wait-ms:6000}") long resultWaitMs) {
         this.settings = settings;
         this.jobs = jobs;
         this.users = users;
@@ -65,6 +68,7 @@ public class DeploymentSettingsService {
         this.publicUrls = publicUrls;
         this.notices = notices;
         this.controlRoot = Path.of(controlRoot);
+        this.resultWaitMs = resultWaitMs;
     }
 
     @Transactional(readOnly = true)
@@ -127,8 +131,30 @@ public class DeploymentSettingsService {
         job.transitionTo(Status.NOTIFYING, 20, "전체 사용자 공지를 완료했습니다.");
         String requestId = requestId(job.getId());
         hostApply.submit(requestId, job.getRedactedTarget(), CANDIDATE_MODE);
-        finalizeFromResult(job, hostApply.readResult(requestId).orElse(null));
+        finalizeFromResult(job, awaitHostResult(requestId));
         return view(jobs.saveAndFlush(job));
+    }
+
+    /**
+     * The root-owned applier runs asynchronously via a systemd path unit, so its
+     * result file usually lands a few seconds after {@code submit}. Wait briefly
+     * for it so the common case finalizes in one request; slower hosts fall back
+     * to {@code SWITCHED} and are resolved by a later {@link #jobView} poll.
+     */
+    private HostApplyResult awaitHostResult(String requestId) {
+        long deadlineNanos = System.nanoTime() + resultWaitMs * 1_000_000L;
+        while (true) {
+            HostApplyResult result = hostApply.readResult(requestId).orElse(null);
+            if (result != null || System.nanoTime() >= deadlineNanos) {
+                return result;
+            }
+            try {
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
     }
 
     @Transactional

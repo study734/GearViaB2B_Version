@@ -36,7 +36,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.admin.enabled=true",
         "app.admin.allowed-ips=127.0.0.1",
         "app.host-apply.control-root=${java.io.tmpdir}/gearvia-tls-api-test",
-        "app.host-apply.hmac-key=test-hmac-key-abcdef0123456789"
+        "app.host-apply.hmac-key=test-hmac-key-abcdef0123456789",
+        "app.host-apply.result-wait-ms=4000"
 })
 @AutoConfigureMockMvc
 @Transactional
@@ -162,5 +163,39 @@ class AdminDeploymentSettingsApiTest {
                 .get().extracting(DeploymentSettings::getPublicUrl).isEqualTo("https://gearvia.corp");
         assertThat(notices.findAll())
                 .anyMatch(notice -> notice.getTitle().contains("gearvia.corp"));
+    }
+
+    @Test
+    void applyWaitsForAnAsyncHostResultBeforeReturning() throws Exception {
+        String token = adminToken();
+        long jobId = createDraft(token);
+
+        mvc.perform(post("/api/v1/admin/deployment-settings/{id}/test", jobId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk());
+
+        Path results = controlRoot.resolve("results");
+        Files.createDirectories(results);
+        Path resultFile = results.resolve("tls-" + jobId + ".env");
+        Files.deleteIfExists(resultFile);
+        Thread writer = new Thread(() -> {
+            try {
+                Thread.sleep(500);
+                Files.writeString(resultFile, String.join("\n",
+                        "requestId=tls-" + jobId, "status=APPLIED", "code=OK",
+                        "certificateIssuer=CN=gearvia.corp",
+                        "certificateNotAfter=Jan  1 00:00:00 2027 GMT",
+                        "certificateSans=DNS:gearvia.corp,DNS:localhost") + "\n");
+            } catch (Exception ignored) {
+                // test thread interruption is not actionable here
+            }
+        });
+        writer.start();
+
+        mvc.perform(post("/api/v1/admin/deployment-settings/{id}/apply", jobId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("COMPLETED"));
+        writer.join();
     }
 }
