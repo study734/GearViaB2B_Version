@@ -35,49 +35,51 @@
 - Bash/배포 계약 9종 + `git diff --check`: 전부 통과
 - 상세: `docs/operations/checkpoint-c-final-verification.md`
 
-## 실 Ubuntu 24.04 VM 인수 시험 — 부분 실행 (2026-09-02)
+## 실 Ubuntu 24.04 VM 인수 시험 — 완료 (2026-09-03)
 
-환경: VirtualBox `GearVia-rec`, `os-ready` 스냅샷(클린 Ubuntu 24.04.4, git+sshd+NOPASSWD
-sudo, NAT nic1 + hostonly nic2), 2 CPU / 3.9 GB RAM. VBoxManage
+환경: VirtualBox `GearVia-rec`, `os-ready` 스냅샷(클린 Ubuntu 24.04.4 LTS, kernel 6.8,
+git+sshd+NOPASSWD sudo), 2 CPU / 3.9 GB RAM. VBoxManage
 `C:/Program Files/Oracle/VirtualBox/VBoxManage.exe`. SSH 키
 `onprem-demo-video/e2e/output/assemble/vm_key`, guest `gearvia` / sudo pw `Gearvia-rec-2026`.
-브랜치 코드는 `git bundle create <b> HEAD` → scp → `git clone <b>` 로 전송(푸시 없이).
-hostonly 정적 IP(.102)는 `os-ready`에서 안 붙음 → NAT 포트포워드
+브랜치 코드(`bc89999`)는 `git bundle create <b> HEAD` → scp → `git clone <b>` (detached HEAD)
+로 전송(푸시 없이). 접속: NAT 포트포워드
 `VBoxManage controlvm GearVia-rec natpf1 "acctest,tcp,127.0.0.1,2222,,22"` 후
-`ssh -p 2222 gearvia@127.0.0.1` 로 접속. 첫 부팅은 SSH-ready 까지 ~5분.
+`ssh -i <key> -p 2222 gearvia@127.0.0.1`. 시험 후 포트포워드 삭제 + `poweroff` +
+`snapshot restore seeded` 로 원복함(현재 `poweroff @ seeded`).
 
-### 통과한 단계
+### 전 단계 통과
 
-- Docker Engine 29.7.2 + Compose v5.5.0 설치 (`get.docker.com`, NAT 경유)
-- `sudo ./install_gearvia_ai_agent_ubuntu.sh --db-password-file /root/pw` 실행
-- OS/아키텍처 검증 통과
-- **소스 빌드**: `b2bgearvia-backend:<sha12>`(Maven), `b2bgearvia-web:<sha12>`(npm) 둘 다 성공 (~8분)
-- `mysql:8.4` / `busybox:1.37` pull, `runtime.env` + 로컬 CA/서버 TLS 생성, `docker compose config` 통과
-- systemd `b2bgearvia.service` 설치 + compose up → `mysql` healthy, `init-data` exited 0
+- Docker Engine 29.7.2 + Compose v5.5.0 설치 (`get.docker.com`, NAT egress)
+- `sudo ./install_gearvia_ai_agent_ubuntu.sh --db-password-file /tmp/dbpw` (비번 20자)
+- OS/아키텍처 검증 → 소스 빌드 `b2bgearvia-backend:bc899997f643`(Maven) +
+  `b2bgearvia-web:bc899997f643`(npm) 성공 (~6분) → `mysql:8.4`·`busybox:1.37` pull
+- `runtime.env` + 로컬 CA/서버 TLS 생성. 서버 인증서 SAN =
+  `IP:10.0.2.15, DNS:gearvia-rec, DNS:localhost, IP:127.0.0.1`
+- systemd `b2bgearvia.service` `active`+`enabled`; compose 4개 컨테이너
+  (`mysql`/`backend`/`web` healthy, `init-data` exited 0)
+- `sudo curl --cacert /etc/gearvia/tls/ca.crt https://127.0.0.1/api/v1/health/ready`
+  → `{"status":"UP"}` HTTP 200 (로컬 CA 체인 검증 성공). `https://localhost/...` 도 동일
+- `gearvia-host-apply.path` `active`, `/etc/gearvia/host-apply.key` (0600 root) 존재
+- `sudo ./uninstall_gearvia_ai_agent_ubuntu.sh` → 컨테이너·네트워크 제거,
+  `[GearVia] ... database volumes ... were preserved`
+- 제거 후: `/etc/gearvia` 전체 삭제(활성 TLS·host-apply.key 포함), gearvia systemd 유닛
+  전무, 데이터 볼륨 `b2bgearvia-mysql-data`·`b2bgearvia-uploads` 보존, 컨테이너 0
 
-### 여기서 잡힌 것
+### 관찰 (전부 사소, 차단 아님)
 
-1. **테스트 실수** — 비번 14자였음. 백엔드 `B2bConfigurationValidator` 는
-   `SPRING_DATASOURCE_PASSWORD` 16자 이상 요구 → 백엔드 crash → unhealthy → 서비스 실패 →
-   설치기 중단. fail-fast 동작 자체는 정상. **재시도 시 16자 이상 비번 사용.**
-2. **제품 관찰(사소)** — 설치기 `gearvia_password_is_valid` 가 16자 최소를 안 잡아
-   이미지 빌드 + compose 기동을 다 한 뒤에야 백엔드에서 걸림. 입력 단계 즉시 거부 필요.
-   (`gearvia-common.sh` 수정 후보)
-3. **제품 관찰(사소)** — `b2bgearvia.service` 는 `TimeoutStartSec=0` + web `depends_on:
-   backend healthy`. 백엔드가 healthy 안 되면 `up -d` 가 오래 블록되고 `systemctl start`
-   타임아웃이 없어 설치기가 `systemctl enable --now` 에서 매달릴 수 있음.
-
-### 미완 (다음 세션)
-
-`os-ready` restore → SSH(NAT 2222) → docker 설치 → bundle clone → **16자+** 비번 파일 →
-설치(이미지 재빌드 ~8분) → `curl --cacert /etc/gearvia/tls/ca.crt
-https://127.0.0.1/api/v1/health/ready` 성공 확인 → `sudo ./uninstall_gearvia_ai_agent_ubuntu.sh`
-→ `test ! -e /etc/gearvia/tls/fullchain.pem` + `docker volume ls` (mysql-data/uploads 보존)
-확인 → `poweroff` → `VBoxManage snapshot restore GearVia-rec seeded`.
-
-> VM 은 인수 시험 후 항상 `poweroff @ seeded` 로 원복할 것 (데모 영상 파이프라인이 그 상태를 기대).
+1. 443 만 게시됨(80 미청취) — HTTP→HTTPS 리다이렉트 없음. 설계상 443 단독이면 정상,
+   80 리다이렉트를 기대했다면 `infra/b2b/compose.yml` web 포트 확인.
+2. 제거 후 `systemctl is-active b2bgearvia` 가 `inactive` 아닌 `failed` 반환(유닛 파일이
+   사라진 뒤 systemd 잔여 상태). `ls /etc/systemd/system` 로는 유닛 없음 확인됨. 표시상 문제.
+3. (이전 세션 관찰 유지) 설치기 `gearvia_password_is_valid` 가 DB 비번 16자 최소를 입력
+   단계에서 안 잡음 — 짧으면 이미지 빌드+compose 기동 후 백엔드 fail-fast 로만 걸림.
+4. (이전 세션 관찰 유지) `b2bgearvia.service` `TimeoutStartSec=0` + web `depends_on:
+   backend healthy` — 백엔드가 healthy 못 되면 `systemctl enable --now` 가 무한 블록 가능.
+5. SSH 로 설치기/제거기 실행 시 세션이 프로세스 stdout 을 붙들어 클라이언트가 매달림.
+   `nohup ... >log 2>&1 &` + 별도 폴링(`pgrep -f install_gearvia`)으로 우회.
 
 ## 그 밖의 출시 전 남은 검증 (미수행 — 통과로 표시하지 않음)
 
-- 호스트 적용기 end-to-end (실 `docker compose` 재생성 + HTTPS 헬스체크 + 비동기 결과 대기)
+- 호스트 적용기 end-to-end (실 `docker compose` 재생성 + HTTPS 헬스체크 + 비동기 결과 대기).
+  이번 VM 시험은 설치→헬스→제거만 다룸. 관리자 도메인·SSL 교체 흐름은 미검증.
 - 사내 LLM 실연동, 측정된 용량, Ubuntu ShellCheck, 프런트엔드 청크 분할 효과

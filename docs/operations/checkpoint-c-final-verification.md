@@ -43,20 +43,26 @@ Vite 8.1.5. **Docker 사용 가능** — MySQL Testcontainers(mysql:8.4)가 실�
 컨텍스트를 `validate`로 기동하는 데 성공한다(Flyway V1~V8, `deployment_settings` 단일 행 CHECK
 제약 포함).
 
+## Ubuntu 24.04 VM 인수 시험 — 완료 (2026-09-03)
+
+VirtualBox `GearVia-rec` (`os-ready` 스냅샷, 클린 Ubuntu 24.04.4 LTS) 에서 브랜치 `bc89999`
+번들을 클론해 실제로 수행함. 상세는 `NEXT_SESSION_HANDOFF.md`.
+
+```bash
+sudo ./install_gearvia_ai_agent_ubuntu.sh --db-password-file /tmp/dbpw   # 비번 20자
+sudo curl --cacert /etc/gearvia/tls/ca.crt https://127.0.0.1/api/v1/health/ready
+sudo ./uninstall_gearvia_ai_agent_ubuntu.sh
+sudo test ! -e /etc/gearvia/tls/fullchain.pem
+```
+
+결과: 소스 이미지 빌드 성공 → 4개 컨테이너(`mysql`/`backend`/`web` healthy, `init-data`
+exited 0) → `/api/v1/health/ready` 가 로컬 CA 체인 검증으로 `{"status":"UP"}` HTTP 200 →
+제거 시 `/etc/gearvia` 전체(활성 TLS·host-apply.key) 삭제, 데이터 볼륨
+`b2bgearvia-mysql-data`·`b2bgearvia-uploads` 보존, gearvia systemd 유닛 전무. 시험 후 VM 은
+`poweroff @ seeded` 로 원복함. 사소한 관찰 5건은 `NEXT_SESSION_HANDOFF.md` 참조.
+
 ## 실행하지 않은 검증 (통과로 표시하지 않음)
 
-- **Ubuntu 24.04 VM 인수 시험** — Docker/systemd를 갖춘 Ubuntu 호스트가 없어 실행하지 못함.
-  출시 전 실제 VM에서 다음을 수행해야 한다.
-
-  ```bash
-  sudo ./install_gearvia_ai_agent_ubuntu.sh --db-password-file /secure/mysql-app-password
-  curl --cacert /etc/gearvia/tls/ca.crt https://127.0.0.1/api/v1/health/ready
-  sudo ./uninstall_gearvia_ai_agent_ubuntu.sh
-  test ! -e /etc/gearvia/tls/fullchain.pem
-  ```
-
-  확인 사항: readiness 성공, 제거 시 활성 TLS 삭제, MySQL/업로드 볼륨 유지,
-  `docker compose up -d --no-deps --force-recreate web` 재생성 경로, systemd `.path` 트리거.
 - **호스트 적용기 end-to-end** — `test-host-apply.sh`는 가짜 docker와 `GEARVIA_TEST_HEALTH`로
   구동한다. 실제 `docker compose` 재생성과 HTTPS 헬스체크, 관리자 API의 비동기 결과 대기
   경로(`SWITCHED` → `GET /jobs/{id}` 최종화)는 미검증.
